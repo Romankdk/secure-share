@@ -26,6 +26,13 @@ CREATE TABLE IF NOT EXISTS files (
     downloads         INTEGER NOT NULL DEFAULT 0
 );
 CREATE INDEX IF NOT EXISTS files_expires_at ON files (expires_at);
+
+-- Recent uploads per visitor, for rate limiting. `client` is HMAC(secret, IP), never the raw IP.
+CREATE TABLE IF NOT EXISTS upload_log (
+    client TEXT    NOT NULL,
+    at     INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS upload_log_client_at ON upload_log (client, at);
 """
 
 # secrets.token_urlsafe(16) gives exactly 22 URL-safe base64 characters. Anything else is rejected
@@ -85,6 +92,8 @@ def purge_expired() -> int:
     try:
         ids = [r["id"] for r in conn.execute("SELECT id FROM files WHERE expires_at <= ?", (now(),))]
         conn.executemany("DELETE FROM files WHERE id = ?", [(i,) for i in ids])
+        # Rate-limit entries older than the window no longer matter; don't keep visitor data longer than needed.
+        conn.execute("DELETE FROM upload_log WHERE at <= ?", (now() - current_app.config["UPLOAD_RATE_WINDOW"],))
         conn.execute("COMMIT")
     except BaseException:
         if conn.in_transaction:

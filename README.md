@@ -64,6 +64,8 @@ sequenceDiagram
 | **Clickjacking, MIME sniffing, referrer leaks, caching** | `frame-ancestors 'none'` + `X-Frame-Options: DENY`, `nosniff`, `Referrer-Policy: no-referrer`, `Cache-Control: no-store`. |
 | **Malicious filenames** (`../../`, right-to-left override tricks) | Names from the decrypted header are sanitised before saving. |
 | **Huge uploads** | 25 MB limit enforced before the request body is read (HTTP 413). |
+| **Flooding the server** | 10 uploads per visitor per hour (HTTP 429) and a total storage cap (HTTP 503). Visitors are tracked only as an HMAC of their IP with a random per-process key, never the raw IP, and entries are deleted after an hour. |
+| **HTTPS being stripped** | `Strict-Transport-Security` on HTTPS responses, so browsers refuse plain HTTP afterwards; otherwise an attacker on the network could serve key-stealing JavaScript. |
 
 ### Limits (what it does not protect against)
 
@@ -77,9 +79,11 @@ sequenceDiagram
   from a bad one. The page rejects obviously malformed keys before downloading to limit this.
 - **Metadata is visible to the server:** file size (roughly), upload and download times, and IP addresses.
 - **Files are held in memory** (up to 25 MB) during upload, download, encryption and decryption,
-  which caps the practical file size and could be abused for memory pressure without rate limiting.
-- **No rate limiting or abuse controls.** A public deployment would need them, plus HTTPS
-  (required anyway: browsers only expose Web Crypto on secure origins, with `localhost` as the exception).
+  which caps the practical file size.
+- **Rate limiting is basic.** It's per IP, so many visitors behind one network share a limit, and
+  someone with many IPs can exceed it. Downloads and `/info` aren't rate limited (IDs are unguessable).
+- **It must be served over HTTPS** in production: browsers only expose Web Crypto on secure origins
+  (`localhost` is the exception).
 - **Deletion is best effort.** Files are removed from disk, but not securely overwritten; SSDs,
   filesystem snapshots or backups may retain ciphertext. Because it's encrypted, that is only a
   risk if the key also leaks.
@@ -106,10 +110,48 @@ upload; to purge on a schedule as well:
 flask --app secure_share purge     # e.g. from cron every 10 minutes
 ```
 
+## Deploy for free on PythonAnywhere
+
+PythonAnywhere's free tier runs Flask apps with HTTPS and persistent storage, so links work from anywhere.
+Replace `USERNAME` below with your PythonAnywhere username.
+
+1. Create a free **Beginner** account at [pythonanywhere.com](https://www.pythonanywhere.com).
+2. Open **Consoles → Bash** and run:
+   ```bash
+   git clone https://github.com/Romankdk/secure-share.git
+   cd secure-share
+   python3.11 -m venv .venv
+   source .venv/bin/activate
+   pip install -r requirements.txt
+   ```
+3. Open the **Web** tab → **Add a new web app** → **Manual configuration** (not the "Flask" option) → **Python 3.11**.
+4. Still on the **Web** tab:
+   - **Virtualenv:** enter `/home/USERNAME/secure-share/.venv`
+   - **Code → WSGI configuration file:** click the link, delete everything in the file, paste this and save:
+     ```python
+     import sys
+
+     path = "/home/USERNAME/secure-share"
+     if path not in sys.path:
+         sys.path.insert(0, path)
+
+     from secure_share import create_app
+
+     # PythonAnywhere puts one proxy in front of the app; this lets the rate limit see real visitor IPs.
+     application = create_app({"TRUSTED_PROXIES": 1})
+     ```
+   - **Security:** turn on **Force HTTPS**.
+5. Click the green **Reload** button and open `https://USERNAME.pythonanywhere.com`.
+6. Optional: **Tasks** tab → add a daily task:
+   `cd /home/USERNAME/secure-share && .venv/bin/flask --app secure_share purge`
+
+To update after pushing changes to GitHub: in a Bash console run `cd ~/secure-share && git pull`, then
+click **Reload** on the Web tab. Free web apps must be renewed every 3 months with one click on the Web tab.
+
 ## Tests
 
 ```bash
-python -m pytest -v                    # server: 47 tests
+python -m pytest -v                    # server: 53 tests
 node --test tests/crypto.test.mjs      # browser crypto (Node 20+): 7 tests
 ```
 

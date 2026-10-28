@@ -12,6 +12,7 @@ import time
 
 from flask import Flask, jsonify, request
 from werkzeug.exceptions import HTTPException
+from werkzeug.middleware.proxy_fix import ProxyFix
 
 from . import db
 
@@ -52,9 +53,25 @@ def create_app(test_config: dict | None = None) -> Flask:
         MAX_CONTENT_LENGTH=MAX_FILE_SIZE + UPLOAD_OVERHEAD,
         # Seconds since the epoch. Injectable so tests can move time forward instead of sleeping.
         CLOCK=time.time,
+        # Abuse limits for a public deployment: uploads per visitor per window, and total ciphertext
+        # kept on disk (PythonAnywhere's free tier has 512 MB including the code).
+        UPLOAD_RATE_LIMIT=10,
+        UPLOAD_RATE_WINDOW=3600,
+        STORAGE_QUOTA=300 * MiB,
+        # How many reverse proxies sit in front of the app (PythonAnywhere, Render, nginx: 1).
+        # Only then can the visitor's IP be taken from X-Forwarded-For; trusting that header with
+        # no proxy in front would let anyone fake their IP and dodge the rate limit.
+        TRUSTED_PROXIES=0,
+        # Visitor IPs are only stored as HMAC(key, ip), never in plain text. A fresh random key per
+        # process means the stored values can't be reversed by hashing all 4 billion IPv4 addresses.
+        RATE_LIMIT_KEY=os.urandom(32),
     )
     if test_config:
         app.config.update(test_config)
+
+    if app.config["TRUSTED_PROXIES"]:
+        n = app.config["TRUSTED_PROXIES"]
+        app.wsgi_app = ProxyFix(app.wsgi_app, x_for=n, x_proto=n, x_host=n)
 
     os.makedirs(app.config["STORAGE_DIR"], exist_ok=True)
     os.makedirs(os.path.dirname(app.config["DATABASE"]), exist_ok=True)
@@ -70,6 +87,10 @@ def create_app(test_config: dict | None = None) -> Flask:
     def add_security_headers(response):
         for name, value in SECURITY_HEADERS.items():
             response.headers[name] = value
+        if request.is_secure:
+            # Once a browser has seen this over HTTPS, it refuses plain HTTP for a year, so nobody
+            # on the network can strip HTTPS and serve tampered JavaScript that steals keys.
+            response.headers["Strict-Transport-Security"] = "max-age=31536000"
         return response
 
     @app.errorhandler(HTTPException)
@@ -79,7 +100,11 @@ def create_app(test_config: dict | None = None) -> Flask:
             message = err.description
             if err.code == 413:
                 message = f"File too large (max {app.config['MAX_FILE_SIZE'] // MiB} MB)."
-            return jsonify(error=message), err.code
+            response = jsonify(error=message)
+            response.status_code = err.code
+            if err.code == 429:
+                response.headers["Retry-After"] = str(app.config["UPLOAD_RATE_WINDOW"])
+            return response
         return err
 
     return app

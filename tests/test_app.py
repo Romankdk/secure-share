@@ -293,6 +293,68 @@ def test_purge_cli(app, client, clock):
     assert len(stored_blobs(app)) == 1
 
 
+# --- abuse limits --------------------------------------------------------------------------------
+
+def upload_from(client, ip, headers=None):
+    return client.post(
+        "/api/files",
+        data={"blob": (io.BytesIO(fake_ciphertext()), "blob.bin"), "expires": "1h", "max_downloads": "1"},
+        content_type="multipart/form-data",
+        environ_base={"REMOTE_ADDR": ip},
+        headers=headers or {},
+    )
+
+
+def test_upload_rate_limit_per_visitor(app, client, clock):
+    app.config["UPLOAD_RATE_LIMIT"] = 3
+    assert [upload_from(client, "203.0.113.1").status_code for _ in range(4)] == [201, 201, 201, 429]
+    res = upload_from(client, "203.0.113.1")
+    assert res.status_code == 429 and res.headers["Retry-After"] == "3600"
+    assert "Too many uploads" in res.get_json()["error"]
+    assert upload_from(client, "203.0.113.2").status_code == 201  # other visitors unaffected
+    clock.advance(3601)
+    assert upload_from(client, "203.0.113.1").status_code == 201  # window has passed
+
+
+def test_raw_ips_are_never_stored(app, client):
+    upload_from(client, "203.0.113.77")
+    with app.app_context():
+        from secure_share.db import get_db
+        stored = [r[0] for r in get_db().execute("SELECT client FROM upload_log")]
+    assert stored and all("203.0.113.77" not in s for s in stored)
+
+
+def test_storage_quota(app, client):
+    app.config["STORAGE_QUOTA"] = 2500
+    assert upload(client, data=fake_ciphertext(1000)).status_code == 201
+    assert upload(client, data=fake_ciphertext(1000)).status_code == 201
+    res = upload(client, data=fake_ciphertext(1000))
+    assert res.status_code == 503
+    assert "full" in res.get_json()["error"]
+
+
+def test_forwarded_ip_ignored_without_a_trusted_proxy(app, client):
+    # With no proxy configured, X-Forwarded-For is attacker-controlled and must not reset the limit.
+    app.config["UPLOAD_RATE_LIMIT"] = 1
+    assert upload_from(client, "203.0.113.5", {"X-Forwarded-For": "198.51.100.1"}).status_code == 201
+    assert upload_from(client, "203.0.113.5", {"X-Forwarded-For": "198.51.100.2"}).status_code == 429
+
+
+def test_forwarded_ip_used_behind_a_trusted_proxy(tmp_path, clock):
+    app = create_app({"DATABASE": str(tmp_path / "p.sqlite"), "STORAGE_DIR": str(tmp_path / "pb"),
+                      "CLOCK": clock, "TRUSTED_PROXIES": 1, "UPLOAD_RATE_LIMIT": 1})
+    client = app.test_client()
+    proxy = "10.0.0.1"  # every request arrives from the proxy; the visitor is in the header
+    assert upload_from(client, proxy, {"X-Forwarded-For": "198.51.100.1"}).status_code == 201
+    assert upload_from(client, proxy, {"X-Forwarded-For": "198.51.100.1"}).status_code == 429
+    assert upload_from(client, proxy, {"X-Forwarded-For": "198.51.100.2"}).status_code == 201
+
+
+def test_hsts_only_over_https(client):
+    assert "Strict-Transport-Security" not in client.get("/").headers
+    assert client.get("/", base_url="https://localhost").headers["Strict-Transport-Security"] == "max-age=31536000"
+
+
 # --- security headers ----------------------------------------------------------------------------
 
 @pytest.mark.parametrize("path", ["/", "/f/" + "a" * 22, "/api/files/" + "a" * 22, "/static/crypto.js"])

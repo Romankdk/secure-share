@@ -8,7 +8,7 @@ import os
 import re
 import secrets
 
-from flask import Blueprint, Response, abort, jsonify, request
+from flask import Blueprint, Response, abort, current_app, jsonify, request
 
 from . import db
 
@@ -39,6 +39,41 @@ def downloads_left(row) -> int:
     return row["max_downloads"] - row["downloads"]
 
 
+def client_key() -> str:
+    """An opaque, per-visitor rate-limit key: HMAC of the IP, so raw IPs are never stored.
+    Behind a proxy, request.remote_addr is the real visitor only if TRUSTED_PROXIES is set."""
+    ip = request.remote_addr or "unknown"
+    return hmac.new(current_app.config["RATE_LIMIT_KEY"], ip.encode(), hashlib.sha256).hexdigest()
+
+
+def check_limits(size: int) -> None:
+    """Refuse the upload if this visitor is over the rate limit or the server is out of space."""
+    cfg = current_app.config
+    conn = db.get_db()
+    client = client_key()
+    conn.execute("BEGIN IMMEDIATE")
+    try:
+        recent = conn.execute(
+            "SELECT COUNT(*) FROM upload_log WHERE client = ? AND at > ?",
+            (client, db.now() - cfg["UPLOAD_RATE_WINDOW"]),
+        ).fetchone()[0]
+        if recent >= cfg["UPLOAD_RATE_LIMIT"]:
+            conn.execute("ROLLBACK")
+            abort(429, "Too many uploads from your network. Please try again later.")
+        # Concurrent uploads can each pass this check, so the quota can be overshot by a few files;
+        # it's a guard against filling the disk, not an exact accounting system.
+        used = conn.execute("SELECT COALESCE(SUM(size), 0) FROM files").fetchone()[0]
+        if used + size > cfg["STORAGE_QUOTA"]:
+            conn.execute("ROLLBACK")
+            abort(503, "The server is full right now. Please try again later.")
+        conn.execute("INSERT INTO upload_log (client, at) VALUES (?, ?)", (client, db.now()))
+        conn.execute("COMMIT")
+    except BaseException:
+        if conn.in_transaction:
+            conn.execute("ROLLBACK")
+        raise
+
+
 @bp.post("")
 def upload():
     # Validate everything before doing any work, so junk requests stay cheap.
@@ -61,6 +96,7 @@ def upload():
         abort(400, "Upload is too small to be an encrypted file.")
 
     db.purge_if_due()  # opportunistic cleanup (throttled), so expired files don't wait for cron
+    check_limits(len(data))
 
     # 128 random bits: unguessable, so ids can't be enumerated to find other people's files.
     file_id = secrets.token_urlsafe(16)
