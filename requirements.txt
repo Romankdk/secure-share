@@ -1,0 +1,5 @@
+# Runtime
+Flask>=3.0,<4
+
+# Tests
+pytest>=8,<9

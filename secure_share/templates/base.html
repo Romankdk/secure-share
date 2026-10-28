@@ -1,0 +1,24 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <!-- Don't let search engines index share links or the pages around them. -->
+  <meta name="robots" content="noindex, nofollow">
+  <title>{% block title %}secure-share{% endblock %}</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+  <main class="card">
+    <header>
+      <a class="brand" href="{{ url_for('pages.index') }}">secure-share</a>
+      <p class="tagline">End-to-end encrypted, self-destructing file sharing</p>
+    </header>
+    {% block content %}{% endblock %}
+    <footer>
+      Files are encrypted in your browser before upload. The server stores only ciphertext and never sees the key.
+    </footer>
+  </main>
+  {% block scripts %}{% endblock %}
+</body>
+</html>

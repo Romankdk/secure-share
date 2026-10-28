@@ -1,0 +1,44 @@
+{% extends "base.html" %}
+{% block content %}
+<form id="upload-form" novalidate>
+  <label class="drop" for="file">
+    <span class="drop-title">Choose a file</span>
+    <span class="hint">Up to 25 MB. It's encrypted before it leaves this device.</span>
+    <input id="file" name="file" type="file" required>
+  </label>
+
+  <div class="row">
+    <label>Expires after
+      <select name="expires">
+        <option value="1h">1 hour</option>
+        <option value="1d" selected>1 day</option>
+        <option value="7d">7 days</option>
+      </select>
+    </label>
+    <label>Max downloads
+      <select name="max_downloads">
+        <option value="1" selected>1 (one-time link)</option>
+        <option value="2">2</option>
+        <option value="3">3</option>
+        <option value="5">5</option>
+        <option value="10">10</option>
+      </select>
+    </label>
+  </div>
+
+  <button id="submit" type="submit" class="primary">Encrypt &amp; upload</button>
+  <p id="status" class="status" role="status" aria-live="polite"></p>
+</form>
+
+<section id="result" hidden>
+  <label for="link">Share this link</label>
+  <div class="link-row">
+    <input id="link" type="text" readonly>
+    <button id="copy" type="button">Copy</button>
+  </div>
+  <p id="result-info" class="hint"></p>
+  <p class="hint">Anyone with the full link can open the file. The part after # is the key; the server never sees it.</p>
+  <button id="delete" type="button" class="danger">Delete now</button>
+</section>
+{% endblock %}
+{% block scripts %}<script type="module" src="{{ url_for('static', filename='upload.js') }}"></script>{% endblock %}

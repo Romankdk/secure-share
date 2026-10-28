@@ -1,0 +1,12 @@
+{% extends "base.html" %}
+{% block title %}Encrypted file · secure-share{% endblock %}
+{% block content %}
+<section>
+  <h1>Someone shared an encrypted file with you</h1>
+  <p id="details" class="hint">Checking the link…</p>
+  <!-- Visiting this page doesn't use up a download; only clicking the button does. -->
+  <button id="download" type="button" class="primary" hidden>Download &amp; decrypt</button>
+  <p id="status" class="status" role="status" aria-live="polite"></p>
+</section>
+{% endblock %}
+{% block scripts %}<script type="module" src="{{ url_for('static', filename='download.js') }}"></script>{% endblock %}
