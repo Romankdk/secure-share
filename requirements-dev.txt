@@ -1,0 +1,3 @@
+# Test tools. Not needed (and not installed) in production.
+-r requirements.txt
+pytest==8.4.2

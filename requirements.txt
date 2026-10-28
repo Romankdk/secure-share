@@ -1,5 +1,11 @@
-# Runtime
-Flask>=3.0,<4
-
-# Tests
-pytest>=8,<9
+# Runtime dependencies, pinned to the exact versions the test suite runs against.
+# Update deliberately: bump a version, run the tests, commit.
+Flask==3.1.3
+Werkzeug==3.1.9
+Jinja2==3.1.6
+MarkupSafe==3.0.4
+itsdangerous==2.2.0
+click==8.1.8
+blinker==1.9.0
+importlib_metadata==8.7.1; python_version < "3.10"
+zipp==3.23.1; python_version < "3.10"

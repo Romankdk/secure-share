@@ -28,6 +28,10 @@ function uploadBlob(formData, onProgress) {
   return new Promise((resolve, reject) => {
     const xhr = new XMLHttpRequest();
     xhr.open("POST", "/api/files");
+    // The server only accepts uploads carrying this header. Other websites can't add custom headers
+    // to cross-site requests without a CORS preflight this server never approves, so they can't
+    // make their visitors' browsers upload here.
+    xhr.setRequestHeader("X-Requested-With", "secure-share");
     xhr.responseType = "json";
     xhr.upload.onprogress = (e) => e.lengthComputable && onProgress(e.loaded / e.total);
     xhr.onload = () => {
